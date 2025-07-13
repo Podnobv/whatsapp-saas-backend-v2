@@ -17,6 +17,9 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+let qrCodeString = '';
+let isConnected = false;
+
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
@@ -25,24 +28,35 @@ const client = new Client({
   },
 });
 
-let qrCodeString = '';
-let isConnected = false;
-
 client.on('qr', (qr) => {
+  console.log('[QR] Novo QR Code gerado.');
   qrCodeString = qr;
-  qrcode.generate(qr, { small: true });
   io.emit('qr', qr);
 });
 
 client.on('ready', () => {
   isConnected = true;
-  console.log('WhatsApp conectado!');
-  io.emit('ready', 'WhatsApp conectado!');
+  console.log('[WHATSAPP] Conectado com sucesso!');
+  io.emit('ready', 'Conectado com sucesso');
+});
+
+client.on('auth_failure', (msg) => {
+  console.error('[ERRO] Falha de autenticação', msg);
+});
+
+client.on('disconnected', (reason) => {
+  console.error('[DESCONECTADO] Cliente desconectado:', reason);
+  isConnected = false;
+  client.initialize(); // tenta reconectar
 });
 
 client.on('message', async (msg) => {
-  console.log('Mensagem recebida:', msg.body);
-  io.emit('message', { from: msg.from, body: msg.body });
+  try {
+    console.log('[MSG] Mensagem recebida:', msg.body);
+    io.emit('message', { from: msg.from, body: msg.body });
+  } catch (error) {
+    console.error('[ERRO ao emitir mensagem]:', error);
+  }
 });
 
 app.get('/initialize', (req, res) => {
@@ -52,11 +66,13 @@ app.get('/initialize', (req, res) => {
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
   const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
+
   try {
     const sent = await client.sendMessage(chatId, message);
     res.send({ status: 'Mensagem enviada', data: sent });
   } catch (error) {
-    res.status(500).send({ status: 'Erro ao enviar', error });
+    console.error('[ERRO ao enviar mensagem]:', error);
+    res.status(500).send({ error: 'Erro ao enviar mensagem', detail: error });
   }
 });
 
@@ -78,7 +94,8 @@ app.post('/send-media', multer().single('file'), async (req, res) => {
     const sent = await client.sendMessage(chatId, media);
     res.send({ status: 'Arquivo enviado', data: sent });
   } catch (error) {
-    res.status(500).send({ status: 'Erro ao enviar', error });
+    console.error('[ERRO ao enviar mídia]:', error);
+    res.status(500).send({ error: 'Erro ao enviar mídia', detail: error });
   }
 });
 
@@ -86,5 +103,5 @@ client.initialize();
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`[SERVER] Backend online na porta ${PORT}`);
 });
