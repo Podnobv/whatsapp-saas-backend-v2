@@ -12,6 +12,7 @@
     "qrcode": "^1.5.1",
     "mime-types": "^2.1.35",
     "express-fileupload": "^1.4.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "puppeteer": "^21.3.8"
   }
 }
