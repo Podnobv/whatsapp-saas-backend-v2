@@ -1,5 +1,5 @@
 const express = require("express");
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const { Client } = require("whatsapp-web.js");
 const qrcode = require("qrcode");
 const cors = require("cors");
 const fileUpload = require("express-fileupload");
@@ -13,15 +13,15 @@ app.use(cors());
 app.use(express.json());
 app.use(fileUpload());
 
+let lastQr = null;
+
+// Cliente sem LocalAuth (compatível com Railway)
 const client = new Client({
-  authStrategy: new LocalAuth(),
   puppeteer: {
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  },
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  }
 });
-
-client.initialize();
 
 client.on("qr", async (qr) => {
   console.log("QR RECEBIDO");
@@ -32,9 +32,17 @@ client.on("ready", () => {
   console.log("Cliente WhatsApp está pronto!");
 });
 
-let lastQr = null;
+client.on("auth_failure", () => {
+  console.log("Falha de autenticação");
+});
 
-app.get("/generate-qr", async (req, res) => {
+client.initialize();
+
+app.get("/", (req, res) => {
+  res.send("Servidor WhatsApp SaaS está rodando.");
+});
+
+app.get("/generate-qr", (req, res) => {
   if (lastQr) {
     res.send(`<img src="${lastQr}" alt="QR Code"/>`);
   } else {
@@ -54,10 +62,6 @@ app.post("/send-message", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => {
-  res.send("Servidor WhatsApp SaaS está rodando.");
-});
-
 app.listen(port, () => {
-  console.log("Servidor rodando na porta", port);
+  console.log(`Servidor rodando na porta ${port}`);
 });
