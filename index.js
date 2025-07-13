@@ -13,7 +13,6 @@ app.use(cors());
 app.use(express.json());
 app.use(fileUpload());
 
-// Inicialização do cliente WhatsApp
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
@@ -43,12 +42,10 @@ client.on("disconnected", () => {
 
 client.initialize();
 
-// Rota para verificar status
 app.get("/", (req, res) => {
   res.send("🚀 Backend do WhatsApp SaaS está rodando.");
 });
 
-// Rota para obter o QR Code
 app.get("/generate-qr", (req, res) => {
   if (qrCodeImage) {
     res.send(`<img src="${qrCodeImage}" alt="QR Code WhatsApp" />`);
@@ -59,7 +56,6 @@ app.get("/generate-qr", (req, res) => {
   }
 });
 
-// Rota para enviar mensagem
 app.post("/send-message", async (req, res) => {
   const { number, message } = req.body;
   if (!number || !message) {
@@ -76,7 +72,6 @@ app.post("/send-message", async (req, res) => {
   }
 });
 
-// Rota para envio de mídia
 app.post("/send-media", async (req, res) => {
   const { number } = req.body;
   if (!req.files || !req.files.media || !number) {
@@ -102,7 +97,6 @@ app.post("/send-media", async (req, res) => {
   }
 });
 
-// Iniciar servidor
 app.listen(port, () => {
   console.log(`🚀 Servidor rodando na porta ${port}`);
 });
