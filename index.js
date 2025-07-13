@@ -1,150 +1,88 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
 const express = require('express');
-const cors = require('cors');
-const http = require('http');
-const { Server } = require('socket.io');
-const fileUpload = require('express-fileupload');
+const { default: makeWASocket, useSingleFileAuthState } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
+const { Boom } = require('@hapi/boom');
 const fs = require('fs');
-const mime = require('mime-types');
 const path = require('path');
+const cors = require('cors');
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' }
-});
+const port = process.env.PORT || 3000;
 
-app.use(cors());
 app.use(express.json());
-app.use(fileUpload());
+app.use(cors());
 
-const SESSION_FOLDER = './session';
-if (!fs.existsSync(SESSION_FOLDER)) fs.mkdirSync(SESSION_FOLDER);
+const { state, saveState } = useSingleFileAuthState('./auth_info.json');
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: SESSION_FOLDER }),
-  puppeteer: {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-gpu'
-    ]
-  }
-});
+let sock;
 
-let qrCodeSVG = '';
-let isReady = false;
+async function startSock() {
+  sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false,
+  });
 
-client.on('qr', async (qr) => {
-  qrCodeSVG = await qrcode.toDataURL(qr);
-  io.emit('qr', qrCodeSVG);
-  isReady = false;
-});
+  sock.ev.on('creds.update', saveState);
 
-client.on('ready', () => {
-  console.log('✅ Cliente conectado ao WhatsApp!');
-  io.emit('ready', 'ready');
-  isReady = true;
-});
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
 
-client.on('authenticated', () => {
-  console.log('🔒 Cliente autenticado.');
-  io.emit('authenticated', 'authenticated');
-});
+    if (qr) {
+      const qrImage = await qrcode.toDataURL(qr);
+      fs.writeFileSync('./latest-qr.txt', qrImage);
+    }
 
-client.on('auth_failure', (msg) => {
-  console.error('❌ Falha na autenticação:', msg);
-  io.emit('auth_failure', msg);
-});
+    if (connection === 'close') {
+      const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('Conexão encerrada. Reconectar?', shouldReconnect);
+      if (shouldReconnect) {
+        startSock();
+      }
+    } else if (connection === 'open') {
+      console.log('✅ Conectado com sucesso ao WhatsApp!');
+    }
+  });
 
-client.on('disconnected', (reason) => {
-  console.log('🔌 Cliente desconectado:', reason);
-  io.emit('disconnected', reason);
-  isReady = false;
-});
+  sock.ev.on('messages.upsert', async (m) => {
+    console.log('📥 Mensagem recebida:', JSON.stringify(m, null, 2));
+  });
+}
 
-client.on('message', async (message) => {
-  console.log('📩 Mensagem recebida:', message.body);
-  io.emit('message', message);
-});
+startSock();
 
-client.initialize();
+// === ROTAS API ===
 
-// Rotas REST
 app.get('/', (req, res) => {
-  res.send('🚀 Backend do WhatsApp SaaS ativo!');
-});
-
-app.get('/status', (req, res) => {
-  res.json({ connected: isReady });
+  res.send({ status: 'Servidor backend WhatsApp ativo.' });
 });
 
 app.get('/qr', (req, res) => {
-  res.json({ qr: qrCodeSVG });
-});
-
-app.post('/send-text', async (req, res) => {
-  const { number, message } = req.body;
   try {
-    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
-    await client.sendMessage(chatId, message);
-    res.status(200).json({ status: 'Mensagem enviada' });
+    const qrData = fs.readFileSync('./latest-qr.txt', 'utf-8');
+    res.send({ qr: qrData });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ status: 'Erro ao enviar mensagem' });
+    res.status(404).send({ error: 'QR Code não disponível no momento.' });
   }
 });
 
-app.post('/send-media', async (req, res) => {
-  const { number } = req.body;
-  if (!req.files || !req.files.media) {
-    return res.status(400).json({ status: 'Arquivo não encontrado' });
+app.post('/send', async (req, res) => {
+  const { number, message } = req.body;
+
+  if (!number || !message) {
+    return res.status(400).send({ error: 'Número e mensagem são obrigatórios.' });
   }
 
-  const media = req.files.media;
-  const mediaPath = path.join(__dirname, 'temp', media.name);
+  const formattedNumber = number.includes('@s.whatsapp.net') ? number : number + '@s.whatsapp.net';
 
-  fs.mkdirSync(path.join(__dirname, 'temp'), { recursive: true });
-  media.mv(mediaPath, async (err) => {
-    if (err) return res.status(500).json({ status: 'Erro ao salvar mídia' });
-
-    const mimetype = mime.lookup(mediaPath);
-    const base64 = fs.readFileSync(mediaPath, { encoding: 'base64' });
-    const { MessageMedia } = require('whatsapp-web.js');
-    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
-
-    try {
-      const mediaMsg = new MessageMedia(mimetype, base64, media.name);
-      await client.sendMessage(chatId, mediaMsg);
-      res.status(200).json({ status: 'Mídia enviada' });
-    } catch (error) {
-      res.status(500).json({ status: 'Erro ao enviar mídia' });
-    } finally {
-      fs.unlinkSync(mediaPath);
-    }
-  });
+  try {
+    await sock.sendMessage(formattedNumber, { text: message });
+    res.send({ status: 'Mensagem enviada com sucesso.' });
+  } catch (err) {
+    console.error('Erro ao enviar:', err);
+    res.status(500).send({ error: 'Erro ao enviar mensagem.' });
+  }
 });
 
-// Socket.IO
-io.on('connection', (socket) => {
-  console.log('🟢 Conectado via WebSocket');
-
-  if (qrCodeSVG && !isReady) socket.emit('qr', qrCodeSVG);
-  if (isReady) socket.emit('ready', 'ready');
-
-  socket.on('disconnect', () => {
-    console.log('🔴 WebSocket desconectado');
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+app.listen(port, () => {
+  console.log(`🚀 Servidor rodando em http://localhost:${port}`);
 });
