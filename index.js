@@ -13,6 +13,24 @@ app.use(cors());
 app.use(express.json());
 app.use(fileUpload());
 
+// ⚙️ CONFIGURAÇÕES DO CHATBOT
+let chatbotConfig = {
+  horarioFuncionamento: {
+    segunda: { abre: "08:00", fecha: "18:00" },
+    terca:   { abre: "08:00", fecha: "18:00" },
+    quarta:  { abre: "08:00", fecha: "18:00" },
+    quinta:  { abre: "08:00", fecha: "18:00" },
+    sexta:   { abre: "08:00", fecha: "18:00" },
+    sabado:  { abre: "09:00", fecha: "13:00" },
+    domingo: { abre: null, fecha: null } // fechado
+  },
+  tempoSemRespostaMin: 10,
+  mensagemAutomatica: "Olá! Em breve nossa equipe retornará. Se preferir, envie seu nome, curso de interesse e melhor horário para contato 😊"
+};
+
+let mensagensPendentes = {}; // Controle de tempo sem resposta
+
+// 🟢 CLIENT WHATSAPP
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
@@ -20,6 +38,8 @@ const client = new Client({
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   },
 });
+
+client.initialize();
 
 let lastQr = null;
 
@@ -29,51 +49,17 @@ client.on("qr", async (qr) => {
 });
 
 client.on("ready", () => {
-  console.log("Cliente WhatsApp está pronto!");
+  console.log("✅ Cliente WhatsApp conectado com sucesso!");
 });
 
 client.on("message", async (msg) => {
+  const numero = msg.from;
+
+  // Verifica se é uma mensagem de grupo
+  if (numero.includes("-")) return;
+
   const agora = new Date();
-  const hora = agora.getHours();
+  const diaSemana = agora.toLocaleDateString("pt-BR", { weekday: "long" }).toLowerCase();
+  const horario = agora.toTimeString().slice(0, 5);
 
-  // Configuração do horário da escola
-  const inicioAtendimento = 8;
-  const fimAtendimento = 18;
-
-  const foraDoHorario = hora < inicioAtendimento || hora >= fimAtendimento;
-
-  if (foraDoHorario) {
-    await client.sendMessage(
-      msg.from,
-      "Olá! Agora estamos fora do horário de atendimento. Em breve responderemos assim que possível!"
-    );
-  }
-});
-
-app.get("/generate-qr", async (req, res) => {
-  if (lastQr) {
-    res.send(`<img src="${lastQr}" alt="QR Code"/>`);
-  } else {
-    res.send("AGUARDANDO QR CODE...");
-  }
-});
-
-app.post("/send-message", async (req, res) => {
-  const { number, message } = req.body;
-  const numberWithCode = number + "@c.us";
-
-  try {
-    await client.sendMessage(numberWithCode, message);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.toString() });
-  }
-});
-
-app.get("/", (req, res) => {
-  res.send("Servidor WhatsApp SaaS está rodando.");
-});
-
-app.listen(port, () => {
-  console.log("Servidor rodando na porta", port);
-});
+  const horarioDia = chatbotConfig.horarioFuncionamento[diaSemana] || {}
