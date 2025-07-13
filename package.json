@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-saas-backend",
+  "version": "1.0.0",
+  "description": "Backend para conexão com WhatsApp via QR Code",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "whatsapp-web.js": "^1.22.1",
+    "qrcode": "^1.5.1",
+    "mime-types": "^2.1.35",
+    "express-fileupload": "^1.4.0",
+    "cors": "^2.8.5"
+  }
+}
