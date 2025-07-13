@@ -1,11 +1,10 @@
-const express = require('express');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
-const fileUpload = require('express-fileupload');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
-const mime = require('mime-types');
+const express = require("express");
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const qrcode = require("qrcode");
+const cors = require("cors");
+const fileUpload = require("express-fileupload");
+const fs = require("fs");
+const mime = require("mime-types");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -14,106 +13,96 @@ app.use(cors());
 app.use(express.json());
 app.use(fileUpload());
 
-// Autenticação local do WhatsApp
+// Inicialização do cliente WhatsApp
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
   }
 });
 
-let qrCodeBase64 = '';
-let conectado = false;
+let qrCodeImage = null;
+let isReady = false;
 
-// Geração do QR Code
-client.on('qr', async (qr) => {
-  conectado = false;
-  qrCodeBase64 = await qrcode.toDataURL(qr);
-  console.log('📲 Novo QR Code gerado');
-});
-
-// Conectado
-client.on('ready', () => {
-  conectado = true;
-  console.log('✅ Conectado ao WhatsApp');
-});
-
-// Desconectado
-client.on('disconnected', () => {
-  conectado = false;
-  console.log('🔌 Desconectado do WhatsApp');
-});
-
-// Inicialização manual
-app.get('/initialize', async (req, res) => {
-  try {
-    await client.initialize();
-    res.send({ status: 'inicializando' });
-  } catch (e) {
-    res.status(500).send({ erro: 'Erro ao inicializar o cliente WhatsApp' });
-  }
-});
-
-// Verifica status da conexão
-app.get('/status', (req, res) => {
-  res.send({
-    status: conectado ? 'conectado' : 'desconectado',
-    qr: conectado ? null : qrCodeBase64
+client.on("qr", (qr) => {
+  qrcode.toDataURL(qr, (err, url) => {
+    qrCodeImage = url;
   });
 });
 
-// Envio de mensagem de texto
-app.post('/send-message', async (req, res) => {
-  const { numero, mensagem } = req.body;
-  if (!numero || !mensagem) {
-    return res.status(400).send({ erro: 'Número e mensagem são obrigatórios.' });
-  }
+client.on("ready", () => {
+  console.log("✅ Cliente WhatsApp pronto");
+  isReady = true;
+});
 
-  const numeroFormatado = numero.includes('@c.us') ? numero : `${numero}@c.us`;
+client.on("disconnected", () => {
+  console.log("❌ Cliente desconectado");
+  isReady = false;
+});
 
-  try {
-    await client.sendMessage(numeroFormatado, mensagem);
-    res.send({ status: 'Mensagem enviada com sucesso' });
-  } catch (err) {
-    res.status(500).send({ erro: 'Erro ao enviar mensagem', detalhe: err.message });
+client.initialize();
+
+// Rota para verificar status
+app.get("/", (req, res) => {
+  res.send("🚀 Backend do WhatsApp SaaS está rodando.");
+});
+
+// Rota para obter o QR Code
+app.get("/generate-qr", (req, res) => {
+  if (qrCodeImage) {
+    res.send(`<img src="${qrCodeImage}" alt="QR Code WhatsApp" />`);
+  } else if (isReady) {
+    res.send("✅ WhatsApp já conectado.");
+  } else {
+    res.send("⏳ Aguardando geração do QR Code...");
   }
 });
 
-// Envio de mídia (imagem, PDF, etc.)
-app.post('/send-media', async (req, res) => {
-  const { numero } = req.body;
-  if (!req.files || !req.files.arquivo || !numero) {
-    return res.status(400).send({ erro: 'Arquivo e número são obrigatórios.' });
-  }
-
-  const arquivo = req.files.arquivo;
-  const caminhoTemp = path.join(__dirname, 'temp', arquivo.name);
-
-  if (!fs.existsSync(path.join(__dirname, 'temp'))) {
-    fs.mkdirSync(path.join(__dirname, 'temp'));
+// Rota para enviar mensagem
+app.post("/send-message", async (req, res) => {
+  const { number, message } = req.body;
+  if (!number || !message) {
+    return res.status(400).json({ error: "Número e mensagem são obrigatórios" });
   }
 
   try {
-    await arquivo.mv(caminhoTemp);
-
-    const mimetype = mime.lookup(caminhoTemp);
-    const base64 = fs.readFileSync(caminhoTemp, { encoding: 'base64' });
-
-    const media = new MessageMedia(mimetype, base64, arquivo.name);
-
-    const numeroFormatado = numero.includes('@c.us') ? numero : `${numero}@c.us`;
-    await client.sendMessage(numeroFormatado, media);
-
-    fs.unlinkSync(caminhoTemp);
-
-    res.send({ status: 'Arquivo enviado com sucesso' });
+    const sanitizedNumber = number.includes("@c.us") ? number : `${number}@c.us`;
+    await client.sendMessage(sanitizedNumber, message);
+    res.json({ success: true, message: "Mensagem enviada com sucesso" });
   } catch (err) {
-    res.status(500).send({ erro: 'Erro ao enviar mídia', detalhe: err.message });
+    console.error("Erro ao enviar mensagem:", err);
+    res.status(500).json({ error: "Falha ao enviar mensagem" });
   }
 });
 
-// Inicializa o servidor
+// Rota para envio de mídia
+app.post("/send-media", async (req, res) => {
+  const { number } = req.body;
+  if (!req.files || !req.files.media || !number) {
+    return res.status(400).json({ error: "Arquivo de mídia e número são obrigatórios" });
+  }
+
+  const mediaFile = req.files.media;
+  const filePath = __dirname + "/" + mediaFile.name;
+
+  await mediaFile.mv(filePath);
+  const mimetype = mime.lookup(filePath);
+  const media = require("whatsapp-web.js").MessageMedia.fromFilePath(filePath);
+
+  try {
+    const sanitizedNumber = number.includes("@c.us") ? number : `${number}@c.us`;
+    await client.sendMessage(sanitizedNumber, media);
+    fs.unlinkSync(filePath);
+    res.json({ success: true, message: "Mídia enviada com sucesso" });
+  } catch (err) {
+    fs.unlinkSync(filePath);
+    console.error("Erro ao enviar mídia:", err);
+    res.status(500).json({ error: "Falha ao enviar mídia" });
+  }
+});
+
+// Iniciar servidor
 app.listen(port, () => {
   console.log(`🚀 Servidor rodando na porta ${port}`);
 });
