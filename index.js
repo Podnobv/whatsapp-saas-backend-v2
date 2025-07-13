@@ -16,68 +16,46 @@ app.use(fileUpload());
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
-    args: ['--no-sandbox'],
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   },
-});
-
-client.on("qr", async (qr) => {
-  const qrCodeImageUrl = await qrcode.toDataURL(qr);
-  fs.writeFileSync("./last-qrcode.txt", qrCodeImageUrl);
-  console.log("🔁 Novo QR Code gerado.");
-});
-
-client.on("ready", () => {
-  console.log("✅ Cliente WhatsApp está pronto!");
-  fs.writeFileSync("./status.txt", "CONNECTED");
-});
-
-client.on("disconnected", () => {
-  console.log("❌ Cliente desconectado.");
-  fs.writeFileSync("./status.txt", "DISCONNECTED");
 });
 
 client.initialize();
 
-// Rota inicial
-app.get("/", (req, res) => {
-  res.send("Servidor WhatsApp SaaS está rodando.");
+client.on("qr", async (qr) => {
+  console.log("QR RECEBIDO");
+  lastQr = await qrcode.toDataURL(qr);
 });
 
-// Rota para obter QR Code atual
+client.on("ready", () => {
+  console.log("Cliente WhatsApp está pronto!");
+});
+
+let lastQr = null;
+
 app.get("/generate-qr", async (req, res) => {
-  try {
-    if (fs.existsSync("./last-qrcode.txt")) {
-      const qrData = fs.readFileSync("./last-qrcode.txt", "utf8");
-      return res.json({ qr: qrData });
-    } else {
-      return res.status(404).json({ error: "QR Code ainda não gerado." });
-    }
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// Rota para verificar status de conexão
-app.get("/status", (req, res) => {
-  if (fs.existsSync("./status.txt")) {
-    const status = fs.readFileSync("./status.txt", "utf8");
-    return res.json({ status });
+  if (lastQr) {
+    res.send(`<img src="${lastQr}" alt="QR Code"/>`);
   } else {
-    return res.json({ status: "LOADING" });
+    res.send("AGUARDANDO QR CODE...");
   }
 });
 
-// Rota para envio de mensagem
 app.post("/send-message", async (req, res) => {
   const { number, message } = req.body;
-  const fullNumber = number + "@c.us";
+  const numberWithCode = number + "@c.us";
 
   try {
-    await client.sendMessage(fullNumber, message);
+    await client.sendMessage(numberWithCode, message);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.toString() });
   }
+});
+
+app.get("/", (req, res) => {
+  res.send("Servidor WhatsApp SaaS está rodando.");
 });
 
 app.listen(port, () => {
