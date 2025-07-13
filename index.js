@@ -1,88 +1,82 @@
 const express = require('express');
-const { default: makeWASocket, useSingleFileAuthState } = require('@whiskeysockets/baileys');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
-const { Boom } = require('@hapi/boom');
-const fs = require('fs');
-const path = require('path');
+const socketIO = require('socket.io');
+const http = require('http');
 const cors = require('cors');
+const mime = require('mime-types');
+const multer = require('multer');
+const fileUpload = require('express-fileupload');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
-const port = process.env.PORT || 3000;
-
-app.use(express.json());
-app.use(cors());
-
-const { state, saveState } = useSingleFileAuthState('./auth_info.json');
-
-let sock;
-
-async function startSock() {
-  sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-  });
-
-  sock.ev.on('creds.update', saveState);
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      const qrImage = await qrcode.toDataURL(qr);
-      fs.writeFileSync('./latest-qr.txt', qrImage);
-    }
-
-    if (connection === 'close') {
-      const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('Conexão encerrada. Reconectar?', shouldReconnect);
-      if (shouldReconnect) {
-        startSock();
-      }
-    } else if (connection === 'open') {
-      console.log('✅ Conectado com sucesso ao WhatsApp!');
-    }
-  });
-
-  sock.ev.on('messages.upsert', async (m) => {
-    console.log('📥 Mensagem recebida:', JSON.stringify(m, null, 2));
-  });
-}
-
-startSock();
-
-// === ROTAS API ===
-
-app.get('/', (req, res) => {
-  res.send({ status: 'Servidor backend WhatsApp ativo.' });
-});
-
-app.get('/qr', (req, res) => {
-  try {
-    const qrData = fs.readFileSync('./latest-qr.txt', 'utf-8');
-    res.send({ qr: qrData });
-  } catch (err) {
-    res.status(404).send({ error: 'QR Code não disponível no momento.' });
+const server = http.createServer(app);
+const io = socketIO(server, {
+  cors: {
+    origin: "*",
   }
 });
 
+app.use(cors());
+app.use(express.json());
+app.use(fileUpload());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+const SESSION_DIR = './session';
+if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR);
+
+const client = new Client({
+  authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
+  puppeteer: {
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  }
+});
+
+client.on('qr', async (qr) => {
+  const qrImage = await qrcode.toDataURL(qr);
+  io.emit('qr', qrImage);
+  io.emit('message', '📲 Leia o QR Code com seu WhatsApp.');
+});
+
+client.on('ready', () => {
+  io.emit('ready', '✅ WhatsApp conectado!');
+  io.emit('message', '🟢 Cliente conectado com sucesso!');
+});
+
+client.on('auth_failure', () => {
+  io.emit('message', '❌ Falha na autenticação. Reinicie o servidor.');
+});
+
+client.on('disconnected', () => {
+  io.emit('message', '⚠️ WhatsApp desconectado. Reinicie o servidor.');
+});
+
+client.initialize();
+
+// Endpoint teste
+app.get('/', (req, res) => {
+  res.send('✅ Backend do WhatsApp SaaS está rodando!');
+});
+
+// Enviar mensagem
 app.post('/send', async (req, res) => {
   const { number, message } = req.body;
-
-  if (!number || !message) {
-    return res.status(400).send({ error: 'Número e mensagem são obrigatórios.' });
-  }
-
-  const formattedNumber = number.includes('@s.whatsapp.net') ? number : number + '@s.whatsapp.net';
-
   try {
-    await sock.sendMessage(formattedNumber, { text: message });
+    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
+    await client.sendMessage(chatId, message);
     res.send({ status: 'Mensagem enviada com sucesso.' });
-  } catch (err) {
-    console.error('Erro ao enviar:', err);
-    res.status(500).send({ error: 'Erro ao enviar mensagem.' });
+  } catch (error) {
+    res.status(500).send({ error: 'Erro ao enviar mensagem.', detail: error });
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${port}`);
+// WebSocket
+io.on('connection', (socket) => {
+  socket.emit('message', '🖥️ WebSocket conectado ao backend!');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
