@@ -1,10 +1,11 @@
 const express = require("express");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode");
-const cors = require("cors");
 const fileUpload = require("express-fileupload");
-const fs = require("fs");
+const cors = require("cors");
 const mime = require("mime-types");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -16,87 +17,67 @@ app.use(fileUpload());
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  }
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  },
 });
 
-let qrCodeImage = null;
+let qrCodeData = null;
 let isReady = false;
 
-client.on("qr", (qr) => {
-  qrcode.toDataURL(qr, (err, url) => {
-    qrCodeImage = url;
-  });
+client.on("qr", async (qr) => {
+  console.log("QR Code recebido");
+  qrCodeData = await qrcode.toDataURL(qr);
+  isReady = false;
 });
 
 client.on("ready", () => {
-  console.log("✅ Cliente WhatsApp pronto");
+  console.log("Cliente está pronto");
   isReady = true;
 });
 
-client.on("disconnected", () => {
-  console.log("❌ Cliente desconectado");
-  isReady = false;
+client.on("authenticated", () => {
+  console.log("Autenticado com sucesso");
+});
+
+client.on("auth_failure", () => {
+  console.log("Falha na autenticação");
+});
+
+client.on("message", async (message) => {
+  console.log("Mensagem recebida:", message.body);
 });
 
 client.initialize();
 
-app.get("/", (req, res) => {
-  res.send("🚀 Backend do WhatsApp SaaS está rodando.");
-});
-
+// Rota para gerar QR Code
 app.get("/generate-qr", (req, res) => {
-  if (qrCodeImage) {
-    res.send(`<img src="${qrCodeImage}" alt="QR Code WhatsApp" />`);
-  } else if (isReady) {
-    res.send("✅ WhatsApp já conectado.");
+  if (isReady) {
+    return res.json({ status: "CONNECTED" });
+  } else if (qrCodeData) {
+    return res.json({ status: "QRCODE", src: qrCodeData });
   } else {
-    res.send("⏳ Aguardando geração do QR Code...");
+    return res.json({ status: "LOADING" });
   }
 });
 
+// Envio de mensagem de texto
 app.post("/send-message", async (req, res) => {
   const { number, message } = req.body;
-  if (!number || !message) {
-    return res.status(400).json({ error: "Número e mensagem são obrigatórios" });
-  }
+  const numberWithCode = number + "@c.us";
 
   try {
-    const sanitizedNumber = number.includes("@c.us") ? number : `${number}@c.us`;
-    await client.sendMessage(sanitizedNumber, message);
-    res.json({ success: true, message: "Mensagem enviada com sucesso" });
+    await client.sendMessage(numberWithCode, message);
+    res.json({ success: true });
   } catch (err) {
-    console.error("Erro ao enviar mensagem:", err);
-    res.status(500).json({ error: "Falha ao enviar mensagem" });
+    res.status(500).json({ success: false, message: err.toString() });
   }
 });
 
-app.post("/send-media", async (req, res) => {
-  const { number } = req.body;
-  if (!req.files || !req.files.media || !number) {
-    return res.status(400).json({ error: "Arquivo de mídia e número são obrigatórios" });
-  }
-
-  const mediaFile = req.files.media;
-  const filePath = __dirname + "/" + mediaFile.name;
-
-  await mediaFile.mv(filePath);
-  const mimetype = mime.lookup(filePath);
-  const media = require("whatsapp-web.js").MessageMedia.fromFilePath(filePath);
-
-  try {
-    const sanitizedNumber = number.includes("@c.us") ? number : `${number}@c.us`;
-    await client.sendMessage(sanitizedNumber, media);
-    fs.unlinkSync(filePath);
-    res.json({ success: true, message: "Mídia enviada com sucesso" });
-  } catch (err) {
-    fs.unlinkSync(filePath);
-    console.error("Erro ao enviar mídia:", err);
-    res.status(500).json({ error: "Falha ao enviar mídia" });
-  }
+// Início
+app.get("/", (req, res) => {
+  res.send("Servidor WhatsApp SaaS está rodando.");
 });
 
 app.listen(port, () => {
-  console.log(`🚀 Servidor rodando na porta ${port}`);
+  console.log("Servidor rodando na porta", port);
 });
