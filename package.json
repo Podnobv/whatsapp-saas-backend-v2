@@ -1,19 +1,23 @@
 {
-  "name": "whatsapp-saas-backend-v2",
+  "name": "whatsapp-saas-backend",
   "version": "1.0.0",
-  "description": "Servidor WhatsApp SaaS com chatbot automático e configuração de horários",
+  "description": "Backend do sistema WhatsApp SaaS com chatbot e QR Code",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "author": "Maurício",
+  "license": "ISC",
   "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
     "express-fileupload": "^1.4.0",
-    "whatsapp-web.js": "^1.22.1",
-    "qrcode": "^1.5.1",
     "mime-types": "^2.1.35",
-    "cors": "^2.8.5",
-    "puppeteer": "^21.3.8",
-    "moment-timezone": "^0.5.45"
+    "multer": "^1.4.5-lts.1",
+    "puppeteer": "^22.8.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1",
+    "whatsapp-web.js": "^1.21.0"
   }
 }
