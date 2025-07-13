@@ -1,4 +1,4 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const express = require('express');
 const fileUpload = require('express-fileupload');
 const qrcode = require('qrcode');
@@ -8,6 +8,7 @@ const fs = require('fs');
 const mime = require('mime-types');
 const cors = require('cors');
 const path = require('path');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -24,7 +25,15 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ]
     }
 });
 
@@ -32,17 +41,17 @@ client.on('qr', async (qr) => {
     qrCodeData = await qrcode.toDataURL(qr);
     isAuthenticated = false;
     io.emit('qr', qrCodeData);
-    console.log('QR gerado. Escaneie com o celular.');
+    console.log('📲 QR Code gerado');
 });
 
 client.on('ready', () => {
-    console.log('✅ Cliente WhatsApp conectado e pronto!');
+    console.log('✅ Cliente pronto!');
     isAuthenticated = true;
     io.emit('ready');
 });
 
 client.on('authenticated', () => {
-    console.log('🔐 Autenticado com sucesso.');
+    console.log('🔐 Autenticado!');
     isAuthenticated = true;
     io.emit('authenticated');
 });
@@ -57,77 +66,67 @@ client.on('disconnected', (reason) => {
     console.log('🚫 Cliente desconectado:', reason);
     isAuthenticated = false;
     io.emit('disconnected', reason);
-    client.initialize(); // Tenta reconectar
+    client.initialize();
 });
 
 client.on('message', (msg) => {
-    console.log(`📩 Mensagem recebida de ${msg.from}: ${msg.body}`);
+    console.log(`📩 ${msg.from}: ${msg.body}`);
     io.emit('message', { from: msg.from, body: msg.body });
 });
 
 app.get('/', (req, res) => {
-    res.send('Servidor backend do WhatsApp SaaS está rodando!');
+    res.send('Servidor WhatsApp SaaS rodando!');
 });
 
 app.get('/qr', (req, res) => {
     if (qrCodeData) {
         res.send(`<img src="${qrCodeData}" />`);
     } else {
-        res.send('Nenhum QR Code disponível no momento.');
+        res.send('Nenhum QR disponível.');
     }
 });
 
 app.get('/status', (req, res) => {
-    res.send({ connected: isAuthenticated });
+    res.json({ connected: isAuthenticated });
 });
 
 app.post('/send-message', async (req, res) => {
     const { number, message } = req.body;
-    if (!number || !message) {
-        return res.status(400).send('Número e mensagem são obrigatórios.');
-    }
+    if (!number || !message) return res.status(400).send('Número e mensagem obrigatórios.');
 
+    const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
     try {
-        const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
         await client.sendMessage(chatId, message);
-        res.send({ status: 'Mensagem enviada com sucesso!' });
-    } catch (error) {
-        res.status(500).send('Erro ao enviar mensagem: ' + error.message);
+        res.send({ status: 'Mensagem enviada' });
+    } catch (err) {
+        res.status(500).send('Erro ao enviar: ' + err.message);
     }
 });
 
 app.post('/send-media', async (req, res) => {
-    if (!req.files || !req.files.file) {
-        return res.status(400).send('Nenhum arquivo enviado.');
+    if (!req.files || !req.files.file || !req.body.number) {
+        return res.status(400).send('Número e arquivo obrigatórios.');
     }
 
-    const file = req.files.file;
     const { number } = req.body;
-
-    if (!number) {
-        return res.status(400).send('Número do destinatário é obrigatório.');
-    }
-
     const chatId = number.includes('@c.us') ? number : `${number}@c.us`;
-    const mediaPath = path.join(__dirname, 'temp', file.name);
+    const file = req.files.file;
 
-    fs.mkdirSync(path.dirname(mediaPath), { recursive: true });
-    fs.writeFileSync(mediaPath, file.data);
+    const media = new MessageMedia(
+        mime.lookup(file.name),
+        file.data.toString('base64'),
+        file.name
+    );
 
     try {
-        const { MessageMedia } = require('whatsapp-web.js');
-        const media = new MessageMedia(mime.lookup(mediaPath), file.data.toString('base64'), file.name);
         await client.sendMessage(chatId, media);
-        res.send({ status: 'Mídia enviada com sucesso!' });
+        res.send({ status: 'Mídia enviada' });
     } catch (err) {
         res.status(500).send('Erro ao enviar mídia: ' + err.message);
-    } finally {
-        fs.unlinkSync(mediaPath); // Remove o arquivo após envio
     }
 });
 
-// Inicialização
 server.listen(PORT, () => {
-    console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+    console.log(`🚀 Servidor rodando na porta ${PORT}`);
     client.initialize();
 });
