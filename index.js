@@ -1,71 +1,68 @@
 const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const fileUpload = require('express-fileupload');
-const fs = require('fs');
 const qrcode = require('qrcode');
-const cors = require('cors');
 const http = require('http');
-const { Server } = require('socket.io');
+const socketIO = require('socket.io');
+const cors = require('cors');
+const fileUpload = require('express-fileupload');
 const mime = require('mime-types');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = socketIO(server, {
+  cors: { origin: '*' }
+});
 
 app.use(cors());
 app.use(express.json());
 app.use(fileUpload());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-let qrCodeData = null;
-let isConnected = false;
 
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
-    headless: true,
-    args: ['--no-sandbox'],
-  },
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-gpu'
+    ]
+  }
 });
 
-client.on('qr', (qr) => {
-  qrCodeData = qr;
-  qrcode.toDataURL(qr, (err, url) => {
-    if (!err) {
-      io.emit('qr', url);
-    }
-  });
+// SOCKET.IO
+
+client.on('qr', async (qr) => {
+  const qrCodeDataURL = await qrcode.toDataURL(qr);
+  io.emit('qr', qrCodeDataURL);
 });
 
 client.on('ready', () => {
-  console.log('✅ Cliente pronto!');
-  isConnected = true;
-  io.emit('ready', 'WhatsApp conectado!');
+  console.log('✅ Cliente WhatsApp pronto!');
+  io.emit('ready', 'WhatsApp conectado com sucesso!');
 });
 
-client.on('authenticated', () => {
-  console.log('🔐 Autenticado com sucesso');
-});
-
-client.on('auth_failure', (msg) => {
-  console.error('❌ Falha na autenticação', msg);
+client.on('auth_failure', () => {
+  console.error('❌ Falha na autenticação');
+  io.emit('auth_failure', 'Falha na autenticação');
 });
 
 client.on('disconnected', (reason) => {
-  console.log('🔌 Desconectado:', reason);
-  isConnected = false;
-  client.initialize();
+  console.warn('⚠️ Cliente desconectado:', reason);
+  io.emit('disconnected', reason);
 });
 
-client.on('message', async (message) => {
-  if (message.body.toLowerCase() === 'oi' || message.body.toLowerCase() === 'olá') {
-    message.reply('Olá! Seja bem-vindo ao atendimento da nossa escola. Em que posso ajudar? 😊');
-  }
-  io.emit('received-message', {
-    from: message.from,
-    body: message.body,
-  });
+client.on('message', async (msg) => {
+  const contato = await msg.getContact();
+  const remetente = contato.number;
+  const mensagem = msg.body;
+  console.log(`📥 Mensagem de ${remetente}: ${mensagem}`);
+  io.emit('message', { remetente, mensagem });
 });
 
 client.initialize();
@@ -73,84 +70,42 @@ client.initialize();
 // ROTAS
 
 app.get('/', (req, res) => {
-  res.send('🚀 API do WhatsApp SaaS está ativa!');
-});
-
-app.get('/qr', (req, res) => {
-  if (qrCodeData) {
-    qrcode.toDataURL(qrCodeData, (err, src) => {
-      if (err) return res.status(500).send('Erro ao gerar QR Code');
-      res.send(`<img src="${src}">`);
-    });
-  } else {
-    res.send('Aguardando QR Code...');
-  }
-});
-
-app.get('/status', (req, res) => {
-  res.json({ connected: isConnected });
+  res.send('Servidor WhatsApp SaaS está rodando.');
 });
 
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
-
-  if (!number || !message) {
-    return res.status(400).json({ error: 'Número e mensagem são obrigatórios.' });
-  }
-
-  const formattedNumber = number.includes('@c.us') ? number : `${number}@c.us`;
-
+  if (!number || !message) return res.status(400).send('Número e mensagem obrigatórios.');
   try {
-    await client.sendMessage(formattedNumber, message);
-    res.status(200).json({ success: true, message: 'Mensagem enviada com sucesso!' });
-  } catch (error) {
-    console.error('Erro ao enviar mensagem:', error);
-    res.status(500).json({ success: false, error: 'Falha ao enviar mensagem.' });
+    await client.sendMessage(`${number}@c.us`, message);
+    res.status(200).send('Mensagem enviada com sucesso!');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Erro ao enviar mensagem.');
   }
 });
 
-// ENVIO DE MÍDIA
 app.post('/send-media', async (req, res) => {
-  const { number } = req.body;
-  const file = req.files?.media;
-
-  if (!number || !file) {
-    return res.status(400).json({ error: 'Número e mídia são obrigatórios.' });
-  }
-
-  const filePath = `uploads/${Date.now()}_${file.name}`;
-  await file.mv(filePath);
-
-  const media = require('whatsapp-web.js').MessageMedia.fromFilePath(filePath);
-
-  const formattedNumber = number.includes('@c.us') ? number : `${number}@c.us`;
+  if (!req.files || !req.files.file) return res.status(400).send('Arquivo ausente.');
+  const file = req.files.file;
+  const number = req.body.number;
+  const tempPath = path.join(__dirname, 'temp', file.name);
 
   try {
-    await client.sendMessage(formattedNumber, media);
-    res.status(200).json({ success: true, message: 'Mídia enviada com sucesso!' });
+    await file.mv(tempPath);
+    const mimetype = mime.lookup(file.name);
+    const { MessageMedia } = require('whatsapp-web.js');
+    const media = MessageMedia.fromFilePath(tempPath);
+    media.mimetype = mimetype;
+    await client.sendMessage(`${number}@c.us`, media);
+    fs.unlinkSync(tempPath);
+    res.status(200).send('Mídia enviada com sucesso!');
   } catch (error) {
     console.error('Erro ao enviar mídia:', error);
-    res.status(500).json({ error: 'Erro ao enviar mídia' });
+    res.status(500).send('Erro ao enviar mídia');
   }
 });
 
-io.on('connection', (socket) => {
-  console.log('🔌 Novo socket conectado');
-
-  if (qrCodeData) {
-    qrcode.toDataURL(qrCodeData, (err, src) => {
-      if (!err) {
-        socket.emit('qr', src);
-      }
-    });
-  }
-
-  if (isConnected) {
-    socket.emit('ready', 'WhatsApp conectado!');
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+server.listen(3000, () => {
+  console.log('🚀 Servidor rodando na porta 3000');
 });
