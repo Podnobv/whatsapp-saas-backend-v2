@@ -1,0 +1,23 @@
+{
+  "build": {
+    "env": {
+      "PORT": "3000"
+    }
+  },
+  "deploy": {
+    "startCommand": "node index.js",
+    "restartPolicy": {
+      "type": "ON_FAILURE",
+      "maxRetries": 10
+    }
+  },
+  "services": [
+    {
+      "name": "backend",
+      "startCommand": "node index.js",
+      "healthcheckPath": "/status",
+      "port": 3000,
+      "protocol": "http"
+    }
+  ]
+}
